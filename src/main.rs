@@ -1,7 +1,9 @@
 use bevy::prelude::{Circle, Color, *};
 
+const G: f32 = 0.000_1;
+
 #[derive(Component)]
-struct Mass(u64);
+struct Mass(f32);
 
 #[derive(Component)]
 struct Velocity(Vec2);
@@ -31,18 +33,19 @@ fn spawn_objects(
     let material = materials.add(ColorMaterial::from(Color::srgb_u8(255, 0, 0)));
 
     let offset = 20.;
+    let count = 1000;
 
-    for i in 0..20000 {
-        let dir = Vec2::from_degrees((360. / 1000.) * i as f32);
+    for i in 0..count {
+        let dir = Vec2::from_degrees((360. / count as f32) * i as f32);
 
         commands.spawn((
-            Velocity(dir * 30.0),
-            Mass(1),
+            Velocity(dir * 5.0),
+            Mass(10_000_000.),
             Mesh2d(circle.clone()),
             MeshMaterial2d(material.clone()),
             Transform {
                 translation: Vec3::new(dir.x * offset, dir.y * offset, 0.), // Offset them a bit
-                scale: Vec3::new(1., 1., 1.),
+                scale: Vec3::new(3., 3., 1.),
                 ..Default::default()
             },
         ));
@@ -56,12 +59,48 @@ fn update_position(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity)
     }
 }
 
+fn calculate_gravitational_acceleration(
+    query: &Query<(Entity, &Mass, &Transform)>,
+    target: Entity,
+    target_position: Vec2,
+) -> Vec2 {
+    let mut passed_target = false;
+    let mut g = Vec2::new(0., 0.);
+
+    for (entity, mass, transform) in query {
+        if !passed_target && entity == target {
+            passed_target = true; // Once we pass the target it does not appear
+                                  // any more, this should allow better optimization
+        } else {
+            let position = Vec2::new(transform.translation.x, transform.translation.y);
+            let dir_vec = position - target_position;
+            g += G * (mass.0 / dir_vec.length_squared()) * dir_vec.normalize();
+        }
+    }
+
+    return g;
+}
+
+fn apply_acceleration(
+    time: Res<Time>,
+    subquery: Query<(Entity, &Mass, &Transform)>,
+    mut query: Query<(Entity, &Transform, &mut Velocity)>,
+) {
+    for (entity, transform, mut velocity) in &mut query {
+        velocity.0 += calculate_gravitational_acceleration(
+            &subquery,
+            entity,
+            Vec2::new(transform.translation.x, transform.translation.y),
+        ) * time.delta_secs();
+    }
+}
+
 pub struct PhysicsPlugin;
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_objects)
-            .add_systems(Update, update_position);
+            .add_systems(Update, (update_position, apply_acceleration).chain());
     }
 }
 
