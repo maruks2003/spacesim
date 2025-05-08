@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 bevy = { version = "0.15.1", features = ["dynamic_linking"] }
+readonly = "0.2.13"
 
 [profile.dev]
 opt-level = 1
