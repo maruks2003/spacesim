@@ -21,6 +21,7 @@ pub struct Node {
 }
 
 /// Stores information about the quadtree.
+#[readonly::make]
 pub struct QuadTree {
     /// The inner vector, storing the nodes
     vec: Vec<Node>,
@@ -31,7 +32,7 @@ pub struct QuadTree {
     /// </div>
     bounds: [Vec2; 2],
     /// The index of root node
-    root: usize,
+    pub root: usize,
 }
 
 impl Node {
@@ -110,6 +111,13 @@ impl QuadTree {
 
         {
             let node = &mut self.vec[node_idx];
+            // Recalculate the center of mass and mass of this node with the
+            // passed arguments
+            node.center_of_mass =
+                (node.center_of_mass * node.mass + position * mass) / (node.mass + mass);
+            node.mass += mass;
+            // Get the quadrant where the position would belong and the center
+            // of that quadrant
             child_quadrant = node.get_quadrant(position);
             new_halfsize = node.half_size / 2.;
             center = match child_quadrant {
@@ -120,10 +128,12 @@ impl QuadTree {
                 _ => panic!("Invalid child quadrant"),
             };
         }
+        // Get the index which the newly created node will be when pushed
         let idx = self.vec.len();
 
         match self.vec[node_idx].children[child_quadrant] {
             None => {
+                // Empty slot, just push the node and add it to the slot.
                 self.vec.push(Node {
                     children: [None; 4],
                     mass,
@@ -134,21 +144,14 @@ impl QuadTree {
                 self.vec[node_idx].children[child_quadrant] = Some(idx);
             }
             Some(child_idx) => {
-                let was_leaf;
-
-                {
-                    let child_node = &self.vec[child_idx];
-                    was_leaf = child_node.is_leaf();
-                }
-
-                if was_leaf {
-                    let idx = self.vec.len();
-
+                if self.vec[child_idx].is_leaf() {
+                    // We'll be replacing the original leaf node with internal
+                    // node, we need to get some information from the original
+                    // node beforehand.
                     let original_center_of_mass;
                     let original_mass;
                     let original_half_size;
                     let original_center;
-
                     {
                         let original = &self.vec[child_idx];
                         original_center_of_mass = original.center_of_mass;
@@ -157,6 +160,9 @@ impl QuadTree {
                         original_center = original.center;
                     }
 
+                    // Push new internal node in the place of the original
+                    // leaf node and replace the original node's index in its
+                    // parrent with the new one
                     self.vec.push(Node {
                         children: [None; 4],
                         mass: original_mass,
@@ -164,11 +170,11 @@ impl QuadTree {
                         center_of_mass: original_center_of_mass,
                         half_size: original_half_size,
                     });
-
                     self.vec[node_idx].children[child_quadrant] = Some(idx);
 
+                    // Find which quadrant does the original node belong to in
+                    // the new internal node and record it in its children there.
                     let new_quadrant = self.vec[idx].get_quadrant(original_center_of_mass);
-
                     {
                         let (new_node, original) = if child_idx < idx {
                             let (first_half, second_half) = self.vec.split_at_mut(idx);
@@ -180,6 +186,8 @@ impl QuadTree {
                             (&mut first_half[idx], &mut second_half[0])
                         };
 
+                        // Adjust the half_size and center according to
+                        // the quadrant.
                         original.half_size /= 2.;
                         original.center = match new_quadrant {
                             0 => Vec2::new(
@@ -204,13 +212,10 @@ impl QuadTree {
                         new_node.children[new_quadrant] = Some(child_idx);
                     }
 
+                    // Try to add the node to the newly created internal node
                     self.split_add_recursive(idx, position, mass);
                 } else {
-                    let node = &mut self.vec[node_idx];
-                    node.center_of_mass =
-                        (node.center_of_mass * node.mass + position * mass) / (node.mass + mass);
-                    node.mass += mass;
-
+                    // Node is internal, try to add to it
                     self.split_add_recursive(child_idx, position, mass);
                 }
             }
@@ -268,6 +273,10 @@ impl QuadTree {
             center.x = self.bounds[1].x;
         }
 
+        // Calculate new center based on the new bounds
+        center.x = (new_bounds[0].x + new_bounds[1].x) / 2.0;
+        center.y = (new_bounds[0].y + new_bounds[1].y) / 2.0;
+
         // Create the new root node
         self.bounds = new_bounds;
         let new_root = self.vec.len();
@@ -299,21 +308,40 @@ impl QuadTree {
         let mut bodies: Vec<&Node> = Vec::new();
         let mut to_visit = vec![self.root];
 
-        while let Some(node) = to_visit.pop() {
-            if self.calculate_theta(node, position) < theta_threshold {
+        while let Some(node_idx) = to_visit.pop() {
+            let node = &self.vec[node_idx];
+            let theta = self.calculate_theta(node_idx, position);
+            if theta < theta_threshold || node.is_leaf() {
                 // If node is under the threshold add it to the return vector.
-                bodies.push(&self.vec[node]);
+                bodies.push(node);
             } else {
                 // Otherwise expand it by adding its children to the visit
                 // vector
-                for child in self.vec[node].children {
-                    if child.is_some() {
-                        to_visit.push(child.unwrap());
-                    }
+                for &child in node.children.iter().flatten() {
+                    to_visit.push(child);
                 }
             }
         }
 
         return bodies;
+    }
+
+    pub fn debug_print(&self, node_idx: usize, indentation: usize) {
+        let node = &self.vec[node_idx];
+        println!(
+            "{}m:{}, com:({}, {})",
+            "\t".repeat(indentation),
+            node.mass,
+            node.center_of_mass.x,
+            node.center_of_mass.y
+        );
+        for child in node.children {
+            match child {
+                Some(child_idx) => {
+                    self.debug_print(child_idx, indentation + 1);
+                }
+                None => {}
+            }
+        }
     }
 }

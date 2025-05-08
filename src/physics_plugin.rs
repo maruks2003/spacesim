@@ -1,5 +1,7 @@
 use crate::quadtree::{Node, QuadTree};
 use bevy::prelude::{Circle, Color, *};
+use rand::distr::StandardUniform;
+use rand::prelude::*;
 
 const G: f32 = 0.000_1;
 
@@ -19,33 +21,57 @@ fn spawn_objects(
     let circle = meshes.add(Circle::new(1.));
     let material = materials.add(ColorMaterial::from(Color::srgb_u8(255, 0, 0)));
 
-    let offset = 100.;
-    let count = 3;
-    let speed = 100.0;
+    let min_offset = 100.;
+    let offset_random_margin = 200.;
+    let count = 2_000;
+    let min_speed = 100.0;
+    let speed_random_margin = 100.0;
+    let min_mass = 1_000_000.;
+    let mass_random_margin = 19_000_000.;
 
     commands.spawn((
         Velocity(Vec2::ZERO),
-        Mass(10_000_000_000.),
+        Mass(100_000_000_000.),
         Mesh2d(circle.clone()),
         MeshMaterial2d(material.clone()),
         Transform {
             translation: Vec3::new(0., 0., 0.),
-            scale: Vec3::new(10., 10., 1.),
+            scale: Vec3::new(50., 50., 1.),
             ..Default::default()
         },
     ));
 
+    let increment_angle = 360. / count as f32;
     for i in 0..count {
-        let dir = Vec2::from_angle(((360. / count as f32) * i as f32).to_radians());
+        let angle: f32 = (increment_angle * i as f32)
+            + rand::rng().sample::<f32, StandardUniform>(StandardUniform) * increment_angle;
+        let dir = Vec2::from_angle(angle.to_radians());
+        let offset = min_offset
+            + offset_random_margin * rand::rng().sample::<f32, StandardUniform>(StandardUniform);
+        let speed = min_speed
+            + speed_random_margin * rand::rng().sample::<f32, StandardUniform>(StandardUniform);
+        let mass_addition =
+            mass_random_margin * rand::rng().sample::<f32, StandardUniform>(StandardUniform);
+        let mass = min_mass + mass_addition;
+
+        let direction = Vec2::new(
+            rand::rng().random_range(-1.0..1.0),
+            rand::rng().random_range(-1.0..1.0),
+        )
+        .normalize();
 
         commands.spawn((
-            Velocity(Vec2::new(-dir.x * speed, dir.y * speed)),
-            Mass(1_000_000.),
+            Velocity(direction * speed),
+            Mass(mass),
             Mesh2d(circle.clone()),
             MeshMaterial2d(material.clone()),
             Transform {
                 translation: Vec3::new(dir.x * offset, dir.y * offset, 0.), // Offset them a bit
-                scale: Vec3::new(3., 3., 1.),
+                scale: Vec3::new(
+                    3. + mass_addition / 800_000.0,
+                    3. + mass_addition / 800_000.0,
+                    1.,
+                ),
                 ..Default::default()
             },
         ));
@@ -59,53 +85,24 @@ fn update_position(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity)
     }
 }
 
-fn calculate_gravitational_acceleration(
-    query: &Query<(Entity, &Mass, &Transform)>,
-    target: Entity,
-    target_position: Vec2,
-) -> Vec2 {
-    let mut g = Vec2::new(0., 0.);
-
-    for (entity, mass, transform) in query {
-        if entity != target {
-            let position = transform.translation.xy();
-            let dir_vec = position - target_position;
-            g += G * (mass.0 / dir_vec.length_squared()) * dir_vec.normalize();
-        }
-    }
-
-    return g;
-}
-
 fn apply_acceleration(
     time: Res<Time>,
     subquery: Query<(Entity, &Mass, &Transform)>,
     mut query: Query<(Entity, &Transform, &mut Velocity)>,
 ) {
-    if true {
-        let mut q_tree = QuadTree::new(Vec2::new(0., 0.), 10.);
-        for (_, mass, transform) in &subquery {
-            q_tree.add_node(transform.translation.xy(), mass.0);
-        }
-        for (_, transform, mut velocity) in &mut query {
-            let bodies = q_tree.collect_bodies(transform.translation.xy(), 0.);
+    let mut q_tree = QuadTree::new(Vec2::new(0., 0.), 1000.);
+    for (_, mass, transform) in &subquery {
+        q_tree.add_node(transform.translation.xy(), mass.0);
+    }
+    for (_, transform, mut velocity) in &mut query {
+        let bodies = q_tree.collect_bodies(transform.translation.xy(), 3.);
 
-            for body in bodies {
-                if body.center_of_mass != transform.translation.xy() {
-                    let dir_vec = body.center_of_mass - transform.translation.xy();
-                    velocity.0 +=
-                        (G * (body.mass / dir_vec.length_squared()) * dir_vec.normalize())
-                            * time.delta_secs();
-                }
+        for body in bodies {
+            if body.center_of_mass != transform.translation.xy() {
+                let dir_vec = body.center_of_mass - transform.translation.xy();
+                velocity.0 += (G * (body.mass / dir_vec.length_squared()) * dir_vec.normalize())
+                    * time.delta_secs();
             }
-        }
-    } else {
-        for (entity, transform, mut velocity) in &mut query {
-            velocity.0 += calculate_gravitational_acceleration(
-                &subquery,
-                entity,
-                Vec2::new(transform.translation.x, transform.translation.y),
-            ) * time.delta_secs();
         }
     }
 }
